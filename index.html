@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>指令監視モニター</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'Consolas', 'Courier New', monospace, sans-serif;
+            padding: 10px;
+        }
+
+        /* ヘッダー */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #555;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #ff3333;
+        }
+
+        .status {
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .clock {
+            color: #00ff00;
+            font-size: 1.4rem;
+        }
+
+        .ws-state {
+            margin-left: 15px;
+            padding: 2px 8px;
+            font-size: 0.9rem;
+        }
+        .ws-ok { background: #008800; color: #fff; }
+        .ws-ng { background: #cc0000; color: #fff; }
+
+        /* セクション共通 */
+        .section-title {
+            font-size: 0.9rem;
+            color: #aaa;
+            background: #222;
+            padding: 4px 8px;
+            margin-bottom: 6px;
+            border-left: 4px solid #00aaff;
+        }
+
+        /* 信号・設備表示エリア */
+        .facility-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .facility-box {
+            flex: 1;
+            border: 1px solid #444;
+            background: #111;
+            padding: 8px;
+            text-align: center;
+        }
+
+        .facility-label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .facility-value {
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+
+        /* 信号色現示 */
+        .sig-R  { color: #ff3333; }
+        .sig-YY { color: #ff9900; }
+        .sig-Y  { color: #ffff00; }
+        .sig-YG { color: #88ff00; }
+        .sig-G  { color: #00ff00; }
+
+        .gate-OPEN   { color: #ff3333; background: #440000; }
+        .gate-CLOSED { color: #00ff00; }
+
+        /* データテーブル */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 15px;
+        }
+
+        th, td {
+            border: 1px solid #333;
+            padding: 6px 10px;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        th {
+            background-color: #1a1a1a;
+            color: #00aaff;
+            font-weight: normal;
+        }
+
+        tr:nth-child(even) {
+            background-color: #080808;
+        }
+
+        .val-num {
+            text-align: right;
+            font-family: monospace;
+        }
+
+        /* 簡易軌道モニター */
+        .track-container {
+            border: 1px solid #444;
+            background: #050505;
+            height: 60px;
+            position: relative;
+            margin-bottom: 15px;
+        }
+
+        .track-rail {
+            position: absolute;
+            top: 50%;
+            left: 2%;
+            width: 96%;
+            height: 2px;
+            background: #555;
+        }
+
+        .train-icon {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: #0066cc;
+            color: #fff;
+            padding: 2px 6px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            border: 1px solid #00aaff;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="title">京浜急行 C-ATS 運行管理モニター</div>
+        <div class="status">
+            時刻: <span id="simTime" class="clock">--:--:--</span>
+            <span id="wsState" class="ws-state ws-ng">切断</span>
+        </div>
+    </div>
+
+    <!-- 信号・設備一覧 -->
+    <div class="section-title">設備・信号現示ステータス</div>
+    <div class="facility-container">
+        <div class="facility-box">
+            <div class="facility-label">第3場内</div>
+            <div id="sigHome3rd" class="facility-value">--</div>
+        </div>
+        <div class="facility-box">
+            <div class="facility-label">第2場内</div>
+            <div id="sigHome2nd" class="facility-value">--</div>
+        </div>
+        <div class="facility-box">
+            <div class="facility-label">第1場内</div>
+            <div id="sigHome1st" class="facility-value">--</div>
+        </div>
+        <div class="facility-box">
+            <div class="facility-label">踏切状態</div>
+            <div id="crossingGate" class="facility-value">--</div>
+        </div>
+        <div class="facility-box">
+            <div class="facility-label">分岐器ロック</div>
+            <div id="turnoutLock" class="facility-value" style="color: #ffff00;">-</div>
+        </div>
+    </div>
+
+    <!-- 簡易軌道モニター -->
+    <div class="section-title">本線在線位置 (0m - 3700m)</div>
+    <div class="track-container" id="trackContainer">
+        <div class="track-rail"></div>
+    </div>
+
+    <!-- 列車一覧 -->
+    <div class="section-title">列車状態一覧</div>
+    <table>
+        <thead>
+            <tr>
+                <th>列車ID</th>
+                <th>種別</th>
+                <th>両数</th>
+                <th>位置 (m)</th>
+                <th>現在速 / 指示速</th>
+                <th>ノッチ</th>
+                <th>状態</th>
+            </tr>
+        </thead>
+        <tbody id="trainTable">
+            <tr><td colspan="7" style="text-align:center; color:#666;">データ受信待機中</td></tr>
+        </tbody>
+    </table>
+
+    <script>
+        const wsUrl = `ws://${window.location.host}/ws`;
+        let ws;
+
+        function init() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                const el = document.getElementById('wsState');
+                el.textContent = '接続中';
+                el.className = 'ws-state ws-ok';
+            };
+
+            ws.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    render(data);
+                } catch (err) {
+                    console.error("JSONパースエラー:", err);
+                }
+            };
+
+            ws.onclose = () => {
+                const el = document.getElementById('wsState');
+                el.textContent = '切断';
+                el.className = 'ws-state ws-ng';
+                setTimeout(init, 2000);
+            };
+        }
+
+        function render(data) {
+            // 時刻
+            document.getElementById('simTime').textContent = data.time || '--:--:--';
+
+            // 信号
+            setSignal('sigHome3rd', data.signals?.home_3rd);
+            setSignal('sigHome2nd', data.signals?.home_2nd);
+            setSignal('sigHome1st', data.signals?.home_1st);
+
+            // 踏切
+            const gateEl = document.getElementById('crossingGate');
+            gateEl.textContent = data.crossing_gate === 'OPEN' ? '開 (遮断)' : '閉';
+            gateEl.className = `facility-value gate-${data.crossing_gate}`;
+
+            // 分岐器
+            document.getElementById('turnoutLock').textContent = data.turnout_lock || '-';
+
+            // 列車テーブル ＆ 軌道表示
+            const tbody = document.getElementById('trainTable');
+            const trackContainer = document.getElementById('trackContainer');
+            
+            tbody.innerHTML = '';
+            
+            // 既存の列車ピン削除
+            const pins = trackContainer.querySelectorAll('.train-icon');
+            pins.forEach(p => p.remove());
+
+            const trains = data.trains || [];
+            trains.forEach(t => {
+                const speedKmh = (t.speed * 3.6).toFixed(1);
+                const targetKmh = (t.target_speed * 3.6).toFixed(1);
+                const posM = t.position.toFixed(1);
+
+                // テーブル行
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><b>${t.id}</b></td>
+                    <td>${t.type}</td>
+                    <td class="val-num">${t.cars}両</td>
+                    <td class="val-num">${posM} m</td>
+                    <td class="val-num">${speedKmh} / ${targetKmh} km/h</td>
+                    <td>${t.notch}</td>
+                    <td>${t.state}</td>
+                `;
+                tbody.appendChild(tr);
+
+                // 軌道ピン (0m - 3700m を 2% - 98% にマッピング)
+                let pct = 2 + (Math.max(0, Math.min(3700, t.position)) / 3700) * 96;
+                const pin = document.createElement('div');
+                pin.className = 'train-icon';
+                pin.style.left = pct + '%';
+                pin.textContent = `${t.id}: ${speedKmh}km/h`;
+                trackContainer.appendChild(pin);
+            });
+        }
+
+        function setSignal(id, aspect) {
+            const el = document.getElementById(id);
+            if (!el || !aspect) return;
+            el.textContent = aspect;
+            el.className = `facility-value sig-${aspect}`;
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
