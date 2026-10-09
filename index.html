@@ -219,25 +219,26 @@
     </table>
 
     <script>
-        // Goサーバーをクラウド（Render/AWS等）に公開した場合はここにそのドメインを入力します。
-        // 空文字 "" の場合は、ローカルテスト環境（localhost:8080）へ自動接続します。
-        const EXTERNAL_SERVER_HOST = ""; // 例: "my-go-server.onrender.com"
+        // 【設定欄】将来 Render 等に Go サーバーを載せたらここにドメインを入力してください。
+        // 空文字 "" の状態では、PCローカル(localhost:8080)に接続します。
+        const RENDER_SERVER_DOMAIN = ""; // 例: "my-train-sim.onrender.com"
 
         function getWebSocketUrl() {
-            if (EXTERNAL_SERVER_HOST) {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                return `${protocol}//${EXTERNAL_SERVER_HOST}/ws`;
+            // Render などのクラウドにサーバーを公開した場合（HTTPS/WSS 通信）
+            if (RENDER_SERVER_DOMAIN !== "") {
+                return `wss://${RENDER_SERVER_DOMAIN}/ws`;
             }
-            // ローカルテスト用デフォルトフォールバック
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = window.location.host || 'localhost:8080';
-            return `${protocol}//${host}/ws`;
+
+            // GitHub Pages等からローカルPC(Go)へ接続する場合
+            return "ws://localhost:8080/ws";
         }
 
         let ws;
 
         function init() {
             const wsUrl = getWebSocketUrl();
+            console.log("WebSocket接続試行:", wsUrl);
+
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
@@ -338,3 +339,4 @@
     </script>
 </body>
 </html>
+
