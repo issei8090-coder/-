@@ -219,16 +219,33 @@
     </table>
 
     <script>
-        const wsUrl = `ws://${window.location.host}/ws`;
+        // Goサーバーをクラウド（Render/AWS等）に公開した場合はここにそのドメインを入力します。
+        // 空文字 "" の場合は、ローカルテスト環境（localhost:8080）へ自動接続します。
+        const EXTERNAL_SERVER_HOST = ""; // 例: "my-go-server.onrender.com"
+
+        function getWebSocketUrl() {
+            if (EXTERNAL_SERVER_HOST) {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                return `${protocol}//${EXTERNAL_SERVER_HOST}/ws`;
+            }
+            // ローカルテスト用デフォルトフォールバック
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host || 'localhost:8080';
+            return `${protocol}//${host}/ws`;
+        }
+
         let ws;
 
         function init() {
+            const wsUrl = getWebSocketUrl();
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
                 const el = document.getElementById('wsState');
-                el.textContent = '接続中';
-                el.className = 'ws-state ws-ok';
+                if (el) {
+                    el.textContent = '接続中';
+                    el.className = 'ws-state ws-ok';
+                }
             };
 
             ws.onmessage = (e) => {
@@ -242,9 +259,15 @@
 
             ws.onclose = () => {
                 const el = document.getElementById('wsState');
-                el.textContent = '切断';
-                el.className = 'ws-state ws-ng';
-                setTimeout(init, 2000);
+                if (el) {
+                    el.textContent = '切断';
+                    el.className = 'ws-state ws-ng';
+                }
+                setTimeout(init, 2000); // 2秒後に自動再接続
+            };
+
+            ws.onerror = (err) => {
+                console.error("WebSocket通信エラー:", err);
             };
         }
 
