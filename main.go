@@ -65,7 +65,7 @@ type Train struct {
 }
 
 func NewKeikyuTrain(id, tType string, cars int, maxSp, acc, dec, pos float64, startTime int, track int) *Train {
-	length := (18.5 * 2.0) + (18.0 * float64(cars-2)) // 先頭18.5m/中間18.0m
+	length := (18.5 * 2.0) + (18.0 * float64(cars-2))
 	return &Train{
 		ID: id, Type: tType, Cars: cars, Length: length, MaxSpeed: maxSp,
 		Acceleration: acc, Deceleration: dec, Position: pos, State: StateReady,
@@ -109,15 +109,14 @@ func (t *Train) CalculateTargetSpeed(sim *Simulation) {
 	pos := t.Position
 	limitSpeed := t.MaxSpeed
 
-	// 12両編成有効長チェック（panicを避けログ出力と停止制御に変更）
+	// 有効長オーバーの安全制御
 	if t.Cars == 12 && t.TargetTrack == 3 {
-		log.Printf("[WARN] 列車 %s: 12両編成有効長不足（Track 3）のため停止指示", t.ID)
 		t.TargetSpeed = 0
 		return
 	}
 
 	if t.State == StateDeadheadToYrd || t.State == StateDeadheadToPlt {
-		t.TargetSpeed = kmhToMs(15.0) // 15km/h制限
+		t.TargetSpeed = kmhToMs(15.0)
 		return
 	}
 
@@ -293,177 +292,6 @@ var (
 	clientsMu sync.Mutex
 )
 
-// 標準WebSocketハンドシェイクキー生成
 func computeAcceptKey(key string) string {
 	h := sha1.New()
-	h.Write([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-func wsHandler(w http.ResponseWriter, r *http.Request) {
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		return
-	}
-	conn, bufrw, err := hj.Hijack()
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	key := r.Header.Get("Sec-WebSocket-Key")
-	if key == "" {
-		return
-	}
-
-	acceptKey := computeAcceptKey(key)
-	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n")
-	bufrw.Flush()
-
-	ch := make(chan []byte, 10)
-	clientsMu.Lock()
-	clients[ch] = true
-	clientsMu.Unlock()
-	defer func() {
-		clientsMu.Lock()
-		delete(clients, ch)
-		clientsMu.Unlock()
-	}()
-
-	for msg := range ch {
-		bufrw.Write([]byte{0x81, byte(len(msg))})
-		bufrw.Write(msg)
-		if err := bufrw.Flush(); err != nil {
-			return
-		}
-	}
-}
-
-func formatTime(totalSec int) string {
-	return fmt.Sprintf("%02d:%02d:%02d", totalSec/3600, (totalSec%3600)/60, totalSec%60)
-}
-
-func main() {
-	sim := &Simulation{TimeSec: 28800, CrossingGate: GateClosed, Signal1stHome: SignalG}
-	trains := []*Train{
-		NewKeikyuTrain("TRAIN_01", "普通(703B)", 8, 105, 3.5, 4.0, 0, 120, 2),
-		NewKeikyuTrain("TRAIN_02", "急行(711T)", 8, 110, 3.3, 3.5, -200, 240, 2),
-		NewKeikyuTrain("TRAIN_03", "MW2号", 12, 120, 3.5, 4.0, -400, 360, 2),
-	}
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "index.html")
-	})
-	http.HandleFunc("/ws", wsHandler)
-
-	go func() {
-		for {
-			time.Sleep(1 * time.Second)
-			sim.TimeSec++
-			if sim.TimeSec >= 28980 && sim.TimeSec <= 29010 {
-				sim.CrossingGate = GateOpen
-			} else {
-				sim.CrossingGate = GateClosed
-			}
-			sim.UpdateSignals()
-
-			for _, t := range trains {
-				switch t.State {
-				case StateReady:
-					t.StateTimer--
-					if t.StateTimer <= 0 {
-						t.State = StateRunning
-					}
-				case StateRunning:
-					if t.Position >= 1800 && t.Position < 2040 {
-						t.Position = 1850
-						t.State = StateStationStop
-						if t.IsShuttle {
-							t.StateTimer = 180
-							sim.TrackShinagawaPlat3 = t.ID
-						} else {
-							t.StateTimer = 60
-							sim.TrackShinagawaPlat2 = t.ID
-						}
-					} else if t.Position >= 2500 {
-						t.State = StateFinished
-					}
-				case StateStationStop:
-					t.StateTimer--
-					if t.ID == "TRAIN_01" && sim.TimeSec == 29070 && !t.IsShuttle {
-						t.StateTimer += 30
-					}
-					if t.StateTimer <= 0 {
-						if t.IsShuttle {
-							t.State = StateFinished
-							sim.TrackShinagawaPlat3 = ""
-						} else if t.ID == "TRAIN_01" {
-							t.State = StateDeadheadToYrd
-							sim.TrackShinagawaPlat2 = ""
-							sim.TurnoutSwitchLock = t.ID
-						} else {
-							t.State = StateRunning
-							sim.TrackShinagawaPlat2 = ""
-							t.Position = 2050
-						}
-					}
-				case StateDeadheadToYrd:
-					if t.Position < 1800.0+50.0+t.Length {
-						t.CurrentSpeed = kmhToMs(15.0)
-					} else {
-						sim.TurnoutSwitchLock = ""
-						t.State = StateYardStop
-						t.StateTimer = 60
-						sim.TrackYardA = t.ID
-					}
-				case StateYardStop:
-					t.StateTimer--
-					if t.StateTimer <= 0 {
-						t.State = StateDeadheadToPlt
-						sim.TrackYardA = ""
-						sim.TurnoutSwitchLock = t.ID
-					}
-				case StateDeadheadToPlt:
-					if t.Position > 1850.0 {
-						t.CurrentSpeed = kmhToMs(15.0)
-					} else {
-						sim.TurnoutSwitchLock = ""
-						t.State = StateFinished
-						sim.TrackShinagawaPlat1 = t.ID
-					}
-				}
-
-				if t.State == StateRunning || t.State == StateDeadheadToYrd || t.State == StateDeadheadToPlt {
-					t.CalculateTargetSpeed(sim)
-					t.UpdatePhysics()
-				}
-			}
-
-			var packet ClientPacket
-			packet.Time = formatTime(sim.TimeSec)
-			packet.CrossingGate = string(sim.CrossingGate)
-			packet.TurnoutLock = sim.TurnoutSwitchLock
-			packet.Signals.Home3rd = string(sim.Signal3rdHome)
-			packet.Signals.Home2nd = string(sim.Signal2ndHome)
-			packet.Signals.Home1st = string(sim.Signal1stHome)
-			packet.Trains = trains
-
-			if msg, err := json.Marshal(packet); err == nil {
-				clientsMu.Lock()
-				for ch := range clients {
-					select {
-					case ch <- msg:
-					default:
-					}
-				}
-				clientsMu.Unlock()
-			}
-		}
-	}()
-
-	fmt.Println("📢 指令室サーバーが起動しました。[http://localhost:8080] をブラウザで開いてください。")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
+	h.Write([]byte(key + "258EAFA5-E914-47
